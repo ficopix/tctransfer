@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+#
+# tctransfer — tiny interactive wrapper around tailcat.
+#
+# Pick a side (expose or connect) and an action (SSH or files). Nothing else.
+# tailcat: https://github.com/tailscale/tailcat
+#
+# Run it:
+#   ./tctransfer
+#   bash <(curl -fsSL <raw-url>)
+#   curl -fsSL <raw-url> | bash        # menus still work: reads from the terminal
+#
+# Overrides (env):
+#   TAILCAT_BIN   path to the tailcat binary   (default: tailcat)
+#   TCT_SSH_KEYS  authorized_keys for serving  (default: ~/.ssh/authorized_keys)
+#
+set -euo pipefail
+
+TAILCAT_BIN="${TAILCAT_BIN:-tailcat}"
+SSH_KEYS="${TCT_SSH_KEYS:-$HOME/.ssh/authorized_keys}"
+
+# Help first, before touching the terminal (works in any context).
+case "${1:-}" in
+  -h|--help)
+    # Print the leading comment block (skip the shebang, stop at the first code line).
+    awk 'NR==1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+    exit 0
+    ;;
+esac
+
+# When piped as `curl ... | bash`, stdin is the script itself, so the prompts
+# would read script bytes. Point reads at the real terminal — but only if it
+# can actually be opened (some sandboxes have /dev/tty yet can't open it).
+if [ ! -t 0 ] && ( : </dev/tty ) 2>/dev/null; then
+  exec </dev/tty
+fi
+
+die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+run()  { printf '\n+ %s\n\n' "$*" >&2; "$@"; }
+
+require_tailcat() {
+  command -v "$TAILCAT_BIN" >/dev/null 2>&1 || die \
+    "tailcat not found in PATH — install it: https://github.com/tailscale/tailcat"
+}
+
+# prompt "question" [default] -> echoes the answer
+prompt() {
+  local q="$1" def="${2:-}" ans
+  if [ -n "$def" ]; then
+    read -r -p "$q [$def]: " ans || true
+    printf '%s' "${ans:-$def}"
+  else
+    read -r -p "$q: " ans || true
+    printf '%s' "$ans"
+  fi
+}
+
+# choose "title" opt1 opt2 ... -> echoes the chosen option text
+choose() {
+  local title="$1"; shift
+  local opt
+  printf '\n%s\n' "$title" >&2
+  select opt in "$@"; do
+    [ -n "${opt:-}" ] && { printf '%s' "$opt"; return 0; }
+    printf 'Pick one of the numbers.\n' >&2
+  done
+}
+
+expose() {
+  local what
+  what=$(choose "What do you want to expose?" \
+    "SSH access" \
+    "Receive files (drop box)" \
+    "Share a folder (read-only)")
+
+  case "$what" in
+    "SSH access")
+      [ -r "$SSH_KEYS" ] || die "no authorized_keys at $SSH_KEYS (set TCT_SSH_KEYS)"
+      # Prints a tcXXXX address; share it with whoever connects.
+      run "$TAILCAT_BIN" serve --ssh-authorized-keys="$SSH_KEYS" ssh
+      ;;
+    "Receive files (drop box)")
+      local dir; dir=$(prompt "Inbox directory" "$HOME/inbox")
+      mkdir -p "$dir"
+      run "$TAILCAT_BIN" recv "$dir"
+      ;;
+    "Share a folder (read-only)")
+      local dir; dir=$(prompt "Folder to share" "$PWD")
+      [ -d "$dir" ] || die "no such directory: $dir"
+      # `serve files` shares the current directory read-only.
+      ( cd "$dir" && run "$TAILCAT_BIN" serve files )
+      ;;
+  esac
+}
+
+connect() {
+  local addr; addr=$(prompt "tailcat address (tcXXXX)")
+  [ -n "$addr" ] || die "an address is required"
+
+  local what
+  what=$(choose "What do you want to do?" \
+    "Open an SSH session" \
+    "Send a file" \
+    "Fetch a file" \
+    "List remote files")
+
+  case "$what" in
+    "Open an SSH session")
+      run "$TAILCAT_BIN" ssh "$addr"
+      ;;
+    "Send a file")
+      local f; f=$(prompt "Local file to send")
+      [ -f "$f" ] || die "no such file: $f"
+      run "$TAILCAT_BIN" cp "$f" "$addr:"
+      ;;
+    "Fetch a file")
+      local rf df
+      rf=$(prompt "Remote path")
+      df=$(prompt "Save to" "$PWD")
+      run "$TAILCAT_BIN" cp "$addr:$rf" "$df"
+      ;;
+    "List remote files")
+      run "$TAILCAT_BIN" ls -l "$addr"
+      ;;
+  esac
+}
+
+main() {
+  require_tailcat
+
+  local side
+  side=$(choose "tctransfer — pick a side:" \
+    "Expose (this machine serves)" \
+    "Connect (to a tcXXXX address)")
+
+  case "$side" in
+    "Expose"*)  expose ;;
+    "Connect"*) connect ;;
+  esac
+}
+
+main "$@"
