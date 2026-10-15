@@ -1,36 +1,37 @@
 #!/usr/bin/env bash
 #
-# tctransfer — tiny interactive wrapper around tailcat.
+# tctransfer — wrapper interactivo y minimalista de tailcat.
 #
-# Pick a side (expose or connect) and an action (SSH or files). Nothing else.
+# Elija un lado (exponer o conectar) y una acción (SSH o archivos). Nada más.
 # tailcat: https://github.com/tailscale/tailcat
 #
-# Run it:
+# Ejecutar:
 #   ./tctransfer
 #   bash <(curl -fsSL <raw-url>)
-#   curl -fsSL <raw-url> | bash        # menus still work: reads from the terminal
+#   curl -fsSL <raw-url> | bash        # los menús funcionan igual: lee del terminal
 #
-# Overrides (env):
-#   TAILCAT_BIN   path to the tailcat binary   (default: tailcat)
-#   TCT_SSH_KEYS  authorized_keys for serving  (default: ~/.ssh/authorized_keys)
+# Variables de entorno:
+#   TAILCAT_BIN   ruta al binario de tailcat   (por defecto: tailcat)
+#   TCT_SSH_KEYS  authorized_keys para servir   (por defecto: ~/.ssh/authorized_keys)
 #
 set -euo pipefail
 
 TAILCAT_BIN="${TAILCAT_BIN:-tailcat}"
 SSH_KEYS="${TCT_SSH_KEYS:-$HOME/.ssh/authorized_keys}"
 
-# Help first, before touching the terminal (works in any context).
+# La ayuda va primero, antes de tocar el terminal (funciona en cualquier contexto).
 case "${1:-}" in
   -h|--help)
-    # Print the leading comment block (skip the shebang, stop at the first code line).
+    # Imprime el bloque de comentarios del encabezado (salta el shebang, corta en la primera línea de código).
     awk 'NR==1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
     exit 0
     ;;
 esac
 
-# When piped as `curl ... | bash`, stdin is the script itself, so the prompts
-# would read script bytes. Point reads at the real terminal — but only if it
-# can actually be opened (some sandboxes have /dev/tty yet can't open it).
+# Cuando se usa como `curl ... | bash`, stdin es el propio script, así que los
+# prompts leerían los bytes del script. Redirigimos las lecturas al terminal
+# real, pero solo si realmente se puede abrir (algunos sandboxes tienen
+# /dev/tty pero no lo pueden abrir).
 if [ ! -t 0 ] && ( : </dev/tty ) 2>/dev/null; then
   exec </dev/tty
 fi
@@ -40,10 +41,10 @@ run()  { printf '\n+ %s\n\n' "$*" >&2; "$@"; }
 
 require_tailcat() {
   command -v "$TAILCAT_BIN" >/dev/null 2>&1 || die \
-    "tailcat not found in PATH — install it: https://github.com/tailscale/tailcat"
+    "tailcat no se encontró en el PATH. Instálelo desde: https://github.com/tailscale/tailcat"
 }
 
-# prompt "question" [default] -> echoes the answer
+# prompt "pregunta" [valor-por-defecto] -> imprime la respuesta
 prompt() {
   local q="$1" def="${2:-}" ans
   if [ -n "$def" ]; then
@@ -55,71 +56,71 @@ prompt() {
   fi
 }
 
-# choose "title" opt1 opt2 ... -> echoes the chosen option text
+# choose "título" opc1 opc2 ... -> imprime el texto de la opción elegida
 choose() {
   local title="$1"; shift
   local opt
   printf '\n%s\n' "$title" >&2
   select opt in "$@"; do
     [ -n "${opt:-}" ] && { printf '%s' "$opt"; return 0; }
-    printf 'Pick one of the numbers.\n' >&2
+    printf 'Elija uno de los números.\n' >&2
   done
 }
 
 expose() {
   local what
-  what=$(choose "What do you want to expose?" \
-    "SSH access" \
-    "Receive files (drop box)" \
-    "Share a folder (read-only)")
+  what=$(choose "¿Qué desea exponer?" \
+    "Acceso SSH" \
+    "Recibir archivos (buzón)" \
+    "Compartir carpeta (solo lectura)")
 
   case "$what" in
-    "SSH access")
-      [ -r "$SSH_KEYS" ] || die "no authorized_keys at $SSH_KEYS (set TCT_SSH_KEYS)"
-      # Prints a tcXXXX address; share it with whoever connects.
+    "Acceso SSH")
+      [ -r "$SSH_KEYS" ] || die "no hay authorized_keys en $SSH_KEYS (configure TCT_SSH_KEYS)"
+      # Imprime una dirección tcXXXX; pásela a quien se conecte.
       run "$TAILCAT_BIN" serve --ssh-authorized-keys="$SSH_KEYS" ssh
       ;;
-    "Receive files (drop box)")
-      local dir; dir=$(prompt "Inbox directory" "$HOME/inbox")
+    "Recibir archivos (buzón)")
+      local dir; dir=$(prompt "Carpeta de entrada" "$HOME/inbox")
       mkdir -p "$dir"
       run "$TAILCAT_BIN" recv "$dir"
       ;;
-    "Share a folder (read-only)")
-      local dir; dir=$(prompt "Folder to share" "$PWD")
-      [ -d "$dir" ] || die "no such directory: $dir"
-      # `serve files` shares the current directory read-only.
+    "Compartir carpeta (solo lectura)")
+      local dir; dir=$(prompt "Carpeta a compartir" "$PWD")
+      [ -d "$dir" ] || die "no existe el directorio: $dir"
+      # `serve files` comparte el directorio actual en solo lectura.
       ( cd "$dir" && run "$TAILCAT_BIN" serve files )
       ;;
   esac
 }
 
 connect() {
-  local addr; addr=$(prompt "tailcat address (tcXXXX)")
-  [ -n "$addr" ] || die "an address is required"
+  local addr; addr=$(prompt "Dirección tailcat (tcXXXX)")
+  [ -n "$addr" ] || die "se requiere una dirección"
 
   local what
-  what=$(choose "What do you want to do?" \
-    "Open an SSH session" \
-    "Send a file" \
-    "Fetch a file" \
-    "List remote files")
+  what=$(choose "¿Qué desea hacer?" \
+    "Abrir una sesión SSH" \
+    "Enviar un archivo" \
+    "Traer un archivo" \
+    "Listar archivos remotos")
 
   case "$what" in
-    "Open an SSH session")
+    "Abrir una sesión SSH")
       run "$TAILCAT_BIN" ssh "$addr"
       ;;
-    "Send a file")
-      local f; f=$(prompt "Local file to send")
-      [ -f "$f" ] || die "no such file: $f"
+    "Enviar un archivo")
+      local f; f=$(prompt "Archivo local a enviar")
+      [ -f "$f" ] || die "no existe el archivo: $f"
       run "$TAILCAT_BIN" cp "$f" "$addr:"
       ;;
-    "Fetch a file")
+    "Traer un archivo")
       local rf df
-      rf=$(prompt "Remote path")
-      df=$(prompt "Save to" "$PWD")
+      rf=$(prompt "Ruta remota")
+      df=$(prompt "Guardar en" "$PWD")
       run "$TAILCAT_BIN" cp "$addr:$rf" "$df"
       ;;
-    "List remote files")
+    "Listar archivos remotos")
       run "$TAILCAT_BIN" ls -l "$addr"
       ;;
   esac
@@ -129,13 +130,13 @@ main() {
   require_tailcat
 
   local side
-  side=$(choose "tctransfer — pick a side:" \
-    "Expose (this machine serves)" \
-    "Connect (to a tcXXXX address)")
+  side=$(choose "tctransfer — elija un lado:" \
+    "Exponer (esta máquina sirve)" \
+    "Conectar (a una dirección tcXXXX)")
 
   case "$side" in
-    "Expose"*)  expose ;;
-    "Connect"*) connect ;;
+    "Exponer"*)  expose ;;
+    "Conectar"*) connect ;;
   esac
 }
 
